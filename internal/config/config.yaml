@@ -1,0 +1,5 @@
+server_mac: "11:22:33:44:55:66"
+server_ip: "192.168.1.100"
+server_mac_port: 9
+local_proxy_port: 11434
+ping

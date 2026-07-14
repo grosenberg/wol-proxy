@@ -1,0 +1,43 @@
+# Binaries for programs and plugins
+*.com
+*.exe
+*.exe~
+*.dll
+*.o
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Code coverage profiles and other test artifacts
+*.log
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# env file and other local-only files
+.env
+bak/
+
+# Editor/IDE
+# .idea/
+.vscode/
+
+# Archives
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
