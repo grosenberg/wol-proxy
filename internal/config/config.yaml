@@ -1,5 +1,23 @@
-server_mac: "11:22:33:44:55:66"
-server_ip: "192.168.1.100"
-server_mac_port: 9
-local_proxy_port: 11434
-ping
+server_mac: "20:25:64:84:cf:96"
+server_ip: "192.168.1.140"
+server_mask: 24
+proxy_port: 11434
+proxy_dial_timeout: 30 * time.Second
+proxy_xfer_timeout: 5 * time.Second
+
+ping_alive_interval: 10sec
+ping_set_timeout: 1sec
+ping_set_count: -1
+ping_retry_interval: 500ms
+ping_log_status_change: true
+
+wol_port: 9
+wol_detect_interval: 10sec
+wol_retry_interval: 500ms
+wol_max_retries: 3
+
+pool_max_connections: 100
+pool_chan_size: 1024
+shutdown_timeout: 1sec
+log_level: "info"
+log_file: "./wol-proxy.log"

@@ -1,0 +1,17 @@
+// Project-local debug tasks
+//
+// For more documentation on how to configure debug tasks,
+// see: https://zed.dev/docs/debugger
+[
+	{
+		"adapter": "Delve",
+		"label": "Run integration tests",
+		"request": "launch",
+		"mode": "debug",
+		"program": ".",
+		"cwd": "$ZED_DIRNAME",
+		"args": [],
+		"buildFlags": ["-tags", "integration"],
+		"env": {},
+	},
+]

@@ -1,0 +1,95 @@
+@startuml
+title Go Application Architecture - Wake-on-LAN Proxy with Pool Manager
+
+actor User
+participant "main.go" as main
+participant "Config Loader" as config
+database "config.yaml" as yaml
+participant "Graceful Shutdown Handler" as shutdown
+participant "Proxy Controller (proxy.go)" as proxy
+participant "Local Port Listener" as listener
+participant "Pool Manager (pool.go)" as pool
+database "Packet Buffer" as buffer
+participant "Monitor (monitor.go)" as monitor
+participant "WoL Handler (wol.go)" as wol
+participant "Remote System" as remote
+
+== Initialization Phase ==
+main -> config: load configuration
+config -> yaml: read config.yaml
+yaml --> config: config data
+config --> main: configuration loaded
+
+main -> shutdown: setup graceful shutdown handler
+
+main -> proxy: startProxy(port, config)
+proxy --> main: proxy started
+
+== Runtime Operations ==
+proxy -> listener: start local port listener
+activate listener
+
+proxy -> pool: create pool manager
+activate pool
+pool -> buffer: initialize packet buffer
+pool -> wol: register WoL handler callback
+
+proxy -> monitor: start monitoring routine
+activate monitor
+
+proxy -> wol: start WoL routine
+activate wol
+
+monitor -> remote: periodic ping
+activate remote
+remote --> monitor: awake/asleep status
+deactivate remote
+monitor -> pool: update remote status (awake/asleep)
+
+User -> listener: send data to local port
+listener -> pool: receive packet
+pool -> buffer: store packet in buffer
+pool -> wol: notify buffer has pending data
+
+wol -> monitor: check current status
+monitor --> wol: asleep
+
+wol -> remote: send WoL magic packet
+activate remote
+
+== Status Change Flow ==
+monitor -> remote: next periodic ping
+remote --> monitor: now awake
+deactivate remote
+monitor -> pool: status changed to awake
+
+pool -> buffer: begin draining packets
+loop For each buffered packet
+    buffer --> pool: get next packet
+    pool -> remote: forward packet
+end
+
+== Concurrent Buffer Management ==
+Note over pool: Pool manager concurrently:\n- Receives new packets\n- Monitors remote status\n- Forwards when awake
+
+monitor -> remote: continue periodic pings
+
+== Shutdown Phase ==
+User -> main: Ctrl+C (SIGINT)
+main -> shutdown: trigger graceful shutdown
+shutdown -> proxy: stop all components
+
+proxy -> listener: stop listening
+proxy -> pool: stop pool manager
+proxy -> monitor: stop monitoring
+proxy -> wol: stop WoL routine
+
+pool -> buffer: clear all pending data
+deactivate pool
+deactivate listener
+deactivate monitor
+deactivate wol
+
+note over main: Application terminated gracefully
+
+@enduml

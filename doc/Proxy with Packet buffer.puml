@@ -1,0 +1,108 @@
+@startuml
+title Go Packet Buffer Architecture - Modified Flow
+
+actor User
+participant "main.go" as main
+participant "Proxy Manager (proxy.go)" as proxy
+participant "Port Listener" as listener
+participant "Pool Manager (pool.go)" as pool
+participant "Monitor (monitor.go)" as monitor
+participant "WoL Handler (wol.go)" as wol
+participant "Remote System" as remote
+
+== Initialization ==
+main -> proxy: New(cfg)
+proxy -> listener: New(cfg.Port)
+proxy -> pool: New(cfg)
+proxy -> monitor: New(cfg, statusChan)
+proxy -> wol: New(cfg, statusChan)
+
+proxy -> monitor: AddSubscriber(proxyStatusChan)
+proxy -> monitor: AddSubscriber(poolStatusChan)
+proxy -> monitor: AddSubscriber(wolStatusChan)
+
+proxy -> listener: SetPacketHandler(pool.OnPacketReceived)
+
+== Startup ==
+main -> proxy: Start()
+proxy -> listener: Start()
+proxy -> monitor: Start()
+proxy -> wol: Start()
+proxy -> pool: Start()
+
+note over pool: Start() launches goroutine\nthat continuously checks buffer
+
+== Monitor Initial Check ==
+monitor -> remote: ping()
+remote --> monitor: asleep
+monitor -> monitor: updateStatus(asleep)
+monitor -> statusChan: StatusUpdate(asleep)
+
+statusChan -> proxy: status change
+statusChan -> pool: status change
+statusChan -> wol: status change
+
+== Packet Processing Loop ==
+
+group "All packet processing follows this pattern"
+    User -> listener: packet arrives
+    listener -> pool: OnPacketReceived(packet)
+
+    pool -> pool: bufferPacket(packet)
+    note over pool: Packet added to ring/queue buffer
+end
+
+group "Pool's continuous goroutine execution"
+    loop forever
+        pool -> pool: checkBuffer()
+
+        alt buffer has packets
+            pool -> monitor: getRemoteStatus()
+            monitor --> pool: current status
+
+            alt remote is awake
+                loop while buffer.HasPackets() AND remoteIsAwake
+                    pool -> pool: dequeuePacket()
+                    pool -> proxy: ForwardToRemote(packet)
+                    proxy -> remote: forward(packet)
+                end
+            else remote is asleep
+                pool -> wol: TriggerWoL()
+                note over wol: Start goroutine to loop sending WoL\nand wait for status update
+
+                wol -> remote: sendMagicPacket()
+                ... wait ...
+                wol -> monitor: waitForStatusChange(asleep → awake)
+                monitor --> wol: status updated to awake
+
+                wol -> pool: notifyRemoteAwake()
+                note over pool: Loop continues, now remote awake
+            end
+        else buffer empty
+            note over pool: Sleep brief interval\navoid tight loop
+        end
+    end
+end
+
+== Status Change Broadcast ==
+monitor -> remote: periodic ping()
+remote --> monitor: status change detected
+monitor -> monitor: updateStatus(newStatus)
+monitor -> statusChan: StatusUpdate(newStatus)
+
+statusChan -> proxy: status change
+statusChan -> pool: status change
+statusChan -> wol: status change
+
+== Graceful Shutdown ==
+main -> proxy: Shutdown()
+proxy -> listener: Stop()
+proxy -> monitor: Stop()
+proxy -> wol: Stop()
+proxy -> pool: Stop()
+proxy -> proxy: cleanup()
+
+main -> proxy: ShutdownComplete()
+main --> main: application terminated
+
+@enduml

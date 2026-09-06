@@ -26,7 +26,7 @@ go.work.sum
 
 # env file and other local-only files
 .env
-bak/
+.bak/
 
 # Editor/IDE
 # .idea/

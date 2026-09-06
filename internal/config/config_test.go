@@ -2,9 +2,33 @@ package config
 
 import (
 	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
+	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
+func TestFileExists(t *testing.T) {
+	// Create a temporary file
+	file, err := os.CreateTemp("", "testfile-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(file.Name()) // Clean up after test
+
+	exists, err := PathExists(file.Name())
+	if err != nil {
+		t.Fatalf("Error checking file existence: %v", err)
+	}
+
+	if !exists {
+		t.Errorf("Expected file to exist, but it does not.")
+	}
+}
+
+// TestDefaultConfig tests that default configuration values are set properly
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 
@@ -13,19 +37,19 @@ func TestDefaultConfig(t *testing.T) {
 			cfg.ServerMAC, "20:25:64:84:cf:96")
 	}
 
-	if cfg.ServerIP != "192.168.1.66" {
+	if cfg.ServerIP != "192.168.1.140" {
 		t.Errorf("DefaultConfig().ServerIP = %s, want %s",
-			cfg.ServerIP, "192.168.1.66")
+			cfg.ServerIP, "192.168.1.140")
 	}
 
-	if cfg.LocalProxyPort != 11434 {
+	if cfg.ProxyPort != 11434 {
 		t.Errorf("DefaultConfig().LocalProxyPort = %d, want %d",
-			cfg.LocalProxyPort, 11434)
+			cfg.ProxyPort, 11434)
 	}
 
-	if cfg.MaxConnections != 100 {
+	if cfg.PoolMaxConnections != 100 {
 		t.Errorf("DefaultConfig().MaxConnections = %d, want %d",
-			cfg.MaxConnections, 100)
+			cfg.PoolMaxConnections, 100)
 	}
 }
 
@@ -47,79 +71,143 @@ func TestLoadConfig_FileNotFound(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_ValidYAML(t *testing.T) {
+// TestLoadConfig tests configuration loading from file
+func TestLoadConfig(t *testing.T) {
+
 	// Create temporary config file
-	yamlContent := `server_mac: "11:22:33:44:55:66"
-server_ip: "10.0.0.1"
-local_proxy_port: 12345
-max_connections: 50
-log_level: "debug"
-ping_timeout: 5s
-retry_interval: 500ms
-max_wol_retries: 5
-server_initial_timeout: 120s
-server_mac_port: 7
-`
-
-	tmpfile, err := os.CreateTemp("", "test_config_*.yaml")
+	file, err := os.CreateTemp("", "config-test-*.yaml")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Failed to create temp file: %v", err)
 	}
-	defer os.Remove(tmpfile.Name())
+	defer os.Remove(file.Name())
 
-	if _, err := tmpfile.Write([]byte(yamlContent)); err != nil {
-		t.Fatal(err)
-	}
-	tmpfile.Close()
-
-	cfg, err := LoadConfig(tmpfile.Name())
-
+	// Convert config to YAML
+	def := DefaultConfig()
+	data, err := yaml.Marshal(def)
 	if err != nil {
-		t.Errorf("LoadConfig() error = %v, want nil", err)
+		t.Fatalf("Failed to marshal default config: %v", err)
 	}
 
-	if cfg.ServerMAC != "11:22:33:44:55:66" {
-		t.Errorf("ServerMAC = %s, want %s", cfg.ServerMAC, "11:22:33:44:55:66")
+	// Write test configuration
+	if err := os.WriteFile(file.Name(), []byte(data), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+	file.Close()
+
+	// Load configuration
+	cfg, err := LoadConfig(file.Name())
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	if cfg.LocalProxyPort != 12345 {
-		t.Errorf("LocalProxyPort = %d, want %d", cfg.LocalProxyPort, 12345)
-	}
-
-	if cfg.MaxConnections != 50 {
-		t.Errorf("MaxConnections = %d, want %d", cfg.MaxConnections, 50)
-	}
-
-	if cfg.LogLevel != "debug" {
-		t.Errorf("LogLevel = %s, want %s", cfg.LogLevel, "debug")
+	// Verify values
+	if !reflect.DeepEqual(def, cfg) {
+		t.Errorf("Expected config as written and read to be equal")
 	}
 }
 
-func TestLoadConfig_InvalidYAML(t *testing.T) {
-	// Create invalid YAML file
-	invalidYAML := `server_mac: "11:22:33:44:55:66"
-server_ip: "10.0.0.1"
-local_proxy_port: notanumber  # This will cause parse error
-`
+type TConfig struct {
+	ServerIP         string        `yaml:"server_ip"`
+	ProxyXferTimeout time.Duration `yaml:"proxy_xfer_timeout"`
+}
 
-	tmpfile, err := os.CreateTemp("", "test_invalid_*.yaml")
+func TDefaultConfig() *TConfig {
+	return &TConfig{
+		ServerIP:         "192.168.1.140",
+		ProxyXferTimeout: 5 * time.Second,
+	}
+}
+
+func TestUnMarshal(t *testing.T) {
+	data := "proxy_xfer_timeout: 5"
+	cfg := &TConfig{}
+	err := yaml.Unmarshal([]byte(data), cfg)
+	if err == nil {
+		t.Fatalf("Unreported Unmarshal value error: %v", err)
+	}
+
+	data = "unknown_tag: 5s"
+	cfg = &TConfig{}
+	err = yaml.Unmarshal([]byte(data), cfg)
+	if err != nil {
+		t.Fatalf("Unmarshal tag error: %v", err)
+	}
+}
+
+// TestInvalidConfig tests error handling for invalid configurations
+func TestInvalidConfig(t *testing.T) {
+	// Test missing required field
+	file, err := os.CreateTemp("", "config-test-*.yaml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(file.Name())
+
+	// Write invalid configuration
+	content := "proxy_xfer_timeout: 5" // valid tag w/invalid value
+	if err := os.WriteFile(file.Name(), []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+	file.Close()
+
+	// Load configuration
+	cfg, err := LoadConfig(file.Name())
+	// fmt.Printf("Config loaded: %+v: %+v\n", cfg, err)
+	if err == nil {
+		t.Error("Expected error for invalid config, got nil")
+	}
+	if cfg != nil {
+		t.Error("LoadConfig() with invalid YAML should return nil config")
+	}
+}
+
+func TestLocateConfig_ExplicitPath(t *testing.T) {
+	custom := "custom/path/config.yaml"
+	got, _, err := LocateConfig(custom)
+	if err != nil {
+		t.Fatalf("LocateConfig(%q) unexpected error: %v", custom, err)
+	}
+	if got != custom {
+		t.Errorf("LocateConfig(%q) = %q, want %q", custom, got, custom)
+	}
+}
+
+func TestLocateConfig_EmptyPath(t *testing.T) {
+	got, _, err := LocateConfig("")
+	if err != nil {
+		t.Fatalf("LocateConfig(\"\") unexpected error: %v", err)
+	}
+	if got == "" {
+		t.Errorf("LocateConfig(\"\") returned empty string")
+	}
+}
+
+func TestLocateConfig_UserConfigDirFound(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "userconfig-*")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(tmpfile.Name())
+	defer os.RemoveAll(tmpDir)
 
-	if _, err := tmpfile.Write([]byte(invalidYAML)); err != nil {
+	// Create AppName/config.yaml inside tmpDir
+	appConfigDir := filepath.Join(tmpDir, AppName)
+	if err := os.MkdirAll(appConfigDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	tmpfile.Close()
-
-	cfg, err := LoadConfig(tmpfile.Name())
-
-	if err == nil {
-		t.Error("LoadConfig() with invalid YAML should return error")
+	expectedPath := filepath.Join(appConfigDir, ConfigName)
+	if err := os.WriteFile(expectedPath, []byte("# test config\n"), 0644); err != nil {
+		t.Fatal(err)
 	}
 
-	if cfg != nil {
-		t.Error("LoadConfig() with invalid YAML should return nil config")
+	// Temporarily override environment variables for UserConfigDir
+	t.Setenv("AppData", tmpDir)
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	got, _, err := LocateConfig("")
+	if err != nil {
+		t.Fatalf("LocateConfig(\"\") error: %v", err)
+	}
+	if got != expectedPath {
+		t.Errorf("LocateConfig(\"\") = %q, want %q", got, expectedPath)
 	}
 }

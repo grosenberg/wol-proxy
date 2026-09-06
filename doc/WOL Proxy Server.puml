@@ -1,0 +1,142 @@
+@startuml
+title Wake-on-LAN Proxy Server - Control Flow
+
+participant "Server.Start()" as start
+participant "Listener" as listener
+participant "Goroutine #1\n(Accept Loop)" as acceptLoop
+participant "s.handleConnection()" as handleConn
+participant "ctx (Context)" as ctx
+participant "wg (WaitGroup)" as wg
+participant "clientConn\n(net.Conn)" as client
+participant "s.makeConnection()" as makeConn
+participant "Dial\nwith Timeout" as dial
+participant "WOL\nSender" as wol
+participant "serverConn\n(net.Conn)" as server
+participant "s.proxy()" as proxy
+participant "proxyToRemote\n(Goroutine)" as proxyToRemote
+participant "proxyToLocal\n(Goroutine)" as proxyToLocal
+participant "Remote\nServer" as remote
+
+== Server Startup ==
+
+start -> start: ctx := context.Background()
+start -> start: wg := &sync.WaitGroup{}
+
+start -> listener: net.Listen("tcp", localAddr)
+listener --> start: (net.Listener)
+
+start -> acceptLoop: go acceptLoop()
+note over start, acceptLoop: WaitGroup NOT added here\n(Main accept loop)
+
+== Connection Acceptance Flow ==
+
+acceptLoop -> listener: Accept()
+alt No Connection
+    listener --> acceptLoop: (blocked)
+else New Connection
+    listener --> acceptLoop: clientConn := net.Conn
+end
+
+acceptLoop -> wg: Add(1)
+acceptLoop -> ctx: WithCancel()
+acceptLoop --> handleConn: s.handleConnection(ctx, clientConn)
+note over acceptLoop, handleConn: Context creation for this connection
+
+== Connection Handling ==
+
+handleConn -> handleConn: defer ctx.Cancel()\ndefer wg.Done()
+handleConn -> client: defer client.Close()
+
+handleConn -> makeConn: serverConn := s.makeConnection(ctx, target)
+handleConn -> proxy: s.proxy(ctx, localConn, serverConn)
+
+== makeConnection() Retry Logic ==
+
+makeConn -> makeConn: for i := 0; i < WOLMaxRetries; i++
+
+makeConn -> dial: net.DialTimeout("tcp", target,\ncfg.ProxyDialTimeout)
+dial -> remote: TCP Handshake
+remote --> dial: (connection result)
+dial --> makeConn: serverConn, err
+
+alt Dial Success
+    makeConn --> handleConn: return serverConn
+    note over makeConn, handleConn: Context passed for timeout/cancellation
+else Dial Failed
+    makeConn -> makeConn: if err != nil && ctx.Err() == nil
+    makeConn -> wol: s.wol.Send(target.mac)
+    wol --> makeConn: (WOL packet sent)
+    makeConn -> makeConn: timeout = cfg.WOLRetryInterval
+    note over makeConn: Loop continues after timeout
+end
+
+alt All Retries Failed
+    makeConn --> handleConn: return error
+    handleConn -> client: Close()\nreturns error
+end
+
+== Proxy Data Transfer ==
+
+proxy -> wg: Add(2)
+proxy -> proxyToRemote: go proxyToRemote()\n(local → remote)
+proxy -> proxyToLocal: go proxyToLocal()\n(remote → local)
+
+note over proxyToLocal: Must monitor for server sleep
+note over proxyToLocal: Detect idle/sleep → trigger WOL
+
+proxyToRemote -> proxyToRemote: defer wg.Done()
+proxyToLocal -> proxyToLocal: defer wg.Done()
+
+== Two-Way Data Flow ==
+
+group proxyToRemote (Local → Remote)
+    proxyToRemote -> client: Read()
+    client --> proxyToRemote: data
+    proxyToRemote -> server: Write(data)
+    server -> remote: Forward
+    remote --> server: (process)
+end
+
+group proxyToLocal (Remote → Local)
+    proxyToLocal -> server: Read()
+    server --> remote: Wait for response
+    remote --> server: response data
+    server --> proxyToLocal: data
+
+    alt Server Sleeps/Unresponsive
+        proxyToLocal -> proxyToLocal: detect sleep condition
+        proxyToLocal -> wol: Trigger WOL wakeup
+        wol --> proxyToLocal: (reestablish)
+    end
+
+    proxyToLocal -> client: Write(data)
+end
+
+== Cleanup Flow ==
+
+alt Normal Completion
+    proxyToRemote -> proxy: return (nil)
+    proxyToLocal -> proxy: return (nil)
+    proxy -> wg: Wait()
+    proxy -> server: Close()\n(important for cleanup)
+else Context Cancellation
+    handleConn -> ctx: Cancel()
+    proxyToRemote -> proxyToRemote: detect ctx.Done()
+    proxyToLocal -> proxyToLocal: detect ctx.Done()
+    proxy -> proxy: early return
+end
+
+proxy --> handleConn: return
+handleConn -> client: Close()\n(deferred)
+handleConn -> wg: Done()\n(deferred)
+handleConn --> acceptLoop: return
+
+== Graceful Shutdown ==
+
+note over start: On shutdown signal
+start -> ctx: Cancel()
+start -> listener: Close()
+acceptLoop -> listener: Accept() returns error
+acceptLoop -> acceptLoop: loop break
+start -> wg: Wait()\n(all connections complete)
+@enduml

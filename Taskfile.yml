@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+vars:
+  APP_NAME: wolproxy
+  BINARY: '{{.APP_NAME}}{{exeExt}}'
+  CMD_PATH: ./cmd/wolproxy
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo "dev"
+  LDFLAGS: -X main.version={{.VERSION}}
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  build:
+    desc: Build console executable
+    sources:
+      - '**/*.go'
+      - go.mod
+      - go.sum
+    generates:
+      - '{{.BINARY}}'
+    cmds:
+      - go build -ldflags "{{.LDFLAGS}}" -o {{.BINARY}} {{.CMD_PATH}}
+
+  build:gui:
+    desc: Build Windows background executable (runs without a console window)
+    sources:
+      - '**/*.go'
+      - go.mod
+      - go.sum
+    generates:
+      - '{{.APP_NAME}}-gui{{exeExt}}'
+    cmds:
+      - go build -ldflags "-H=windowsgui {{.LDFLAGS}}" -o {{.APP_NAME}}-gui{{exeExt}} {{.CMD_PATH}}
+
+  run:
+    desc: 'Run the application directly with go run (pass flags via: task run -- -l DEBUG)'
+    cmds:
+      - go run {{.CMD_PATH}} {{.CLI_ARGS}}
+
+  test:
+    desc: Run all unit tests
+    cmds:
+      - go test -v ./...
+
+  test:race:
+    desc: Run unit tests with race detection enabled
+    cmds:
+      - go test -v -race ./...
+
+  test:cover:
+    desc: Run unit tests and generate HTML coverage report
+    sources:
+      - '**/*.go'
+    generates:
+      - coverage.out
+      - coverage.html
+    cmds:
+      - go test -v -coverprofile=coverage.out ./...
+      - go tool cover -html=coverage.out -o coverage.html
+
+  vet:
+    desc: Run go vet analysis across packages
+    cmds:
+      - go vet ./...
+
+  clean:
+    desc: Remove built binaries and test coverage artifacts
+    cmds:
+      - go clean
+      - cmd: powershell -NoProfile -Command "Remove-Item -Force -ErrorAction SilentlyContinue {{.APP_NAME}}*.exe, coverage.out, coverage.html"
+        platforms: [windows]
+      - cmd: rm -f {{.APP_NAME}}* coverage.out coverage.html
+        platforms: [linux, darwin]
+
