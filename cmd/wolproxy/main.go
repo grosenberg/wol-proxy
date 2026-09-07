@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/alchemy/rotoslog"
+	"github.com/grosenberg/wol-proxy/internal/cflag"
 	"github.com/grosenberg/wol-proxy/internal/config"
 	"github.com/grosenberg/wol-proxy/internal/proxy"
 )
@@ -22,6 +22,7 @@ import (
 var version = "dev"
 
 func main() {
+
 	// Command-line flags
 	var (
 		pathname    string
@@ -31,22 +32,24 @@ func main() {
 		showVersion bool
 	)
 
-	flag.StringVar(&pathname, "c", "", "Pathname of YAML configuration file")
-	flag.StringVar(&logLevel, "l", "INFO", "Set log level (DEBUG, INFO, WARN, ERROR)")
-	flag.BoolVar(&saveConfig, "s", false, "Save default config and exit")
-	flag.BoolVar(&saveForced, "s!", false, "Force save default config and exit")
-	flag.BoolVar(&showVersion, "v", false, "Print version information and exit")
+	flags := cflag.NewCFlagSet(config.AppName)
+	flags.StringVar(&pathname, "c", "", "Pathname of YAML configuration file")
+	flags.StringVar(&logLevel, "l", "INFO", "Set log level (DEBUG, INFO, WARN, ERROR)")
+	flags.BoolVar(&saveConfig, "s", false, "Save default config and exit")
+	flags.BoolVar(&saveForced, "S", false, "Force save to overwrite any existing config")
+	flags.BoolVar(&showVersion, "v", false, "Print version information and exit")
 
-	flag.Usage = func() {
-		out := flag.CommandLine.Output()
+	flags.Usage = func() {
+		out := flags.Output()
 		fmt.Fprintf(out, "wolproxy - Wake-on-LAN TCP Proxy Service\n\n")
 		fmt.Fprintf(out, "Usage:\n")
 		fmt.Fprintf(out, "  wolproxy [options]\n\n")
 		fmt.Fprintf(out, "Options:\n")
-		flag.PrintDefaults()
+		flags.PrintDefaults()
+		fmt.Println()
 	}
 
-	flag.Parse()
+	cflag.Parse()
 
 	// Interpret flags
 

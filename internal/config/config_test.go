@@ -183,6 +183,11 @@ func TestLocateConfig_EmptyPath(t *testing.T) {
 }
 
 func TestLocateConfig_UserConfigDirFound(t *testing.T) {
+
+	// Execute with CWD set to repository root to avoid resource collision
+	root := findRepoRoot(t)
+	t.Chdir(root)
+
 	tmpDir, err := os.MkdirTemp("", "userconfig-*")
 	if err != nil {
 		t.Fatal(err)
@@ -209,5 +214,23 @@ func TestLocateConfig_UserConfigDirFound(t *testing.T) {
 	}
 	if got != expectedPath {
 		t.Errorf("LocateConfig(\"\") = %q, want %q", got, expectedPath)
+	}
+}
+
+func findRepoRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("could not find repository root (go.mod)")
+		}
+		dir = parent
 	}
 }

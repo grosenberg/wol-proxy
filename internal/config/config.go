@@ -81,8 +81,8 @@ const (
 
 // LocateConfig finds a presumed existing configuration file.
 //
-// If a cli pathname is given, validate the ext is of type YAML,
-// or add the default config file name if only a directory was given.
+// If a cli pathname is given, validate the ext is of type YAML.
+// If only given a directory path, add the default config file name.
 // If no pathname is given, look in the expected places to find a
 // a configuration file:
 // 1. the current working directory
