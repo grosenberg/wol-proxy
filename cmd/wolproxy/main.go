@@ -12,10 +12,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/alchemy/rotoslog"
+	"github.com/DeRuina/timberjack"
+
 	"github.com/grosenberg/wol-proxy/internal/cflag"
 	"github.com/grosenberg/wol-proxy/internal/config"
-	"github.com/grosenberg/wol-proxy/internal/proxy"
+	"github.com/grosenberg/wol-proxy/internal/rproxy"
 )
 
 // version can be overridden at build time via -ldflags "-X main.version=..."
@@ -34,7 +35,7 @@ func main() {
 
 	flags := cflag.NewCFlagSet(config.AppName)
 	flags.StringVar(&pathname, "c", "", "Pathname of YAML configuration file")
-	flags.StringVar(&logLevel, "l", "INFO", "Set log level (DEBUG, INFO, WARN, ERROR)")
+	flags.StringVar(&logLevel, "l", "", "Set log level (DEBUG, INFO, WARN, ERROR)")
 	flags.BoolVar(&saveConfig, "s", false, "Save default config and exit")
 	flags.BoolVar(&saveForced, "S", false, "Force save to overwrite any existing config")
 	flags.BoolVar(&showVersion, "v", false, "Print version information and exit")
@@ -51,6 +52,7 @@ func main() {
 
 	cflag.Parse()
 
+	// ==========================================
 	// Interpret flags
 
 	if showVersion {
@@ -60,7 +62,7 @@ func main() {
 
 	if saveConfig || saveForced {
 
-		// -s or -s! & no -c: will save to <default user config path>/<appname>/config.yaml
+		// -s or -S & no -c: will save to <default user config path>/<appname>/config.yaml
 		if pathname == "" {
 			path, err := config.GetUserConfigPath()
 			if err != nil {
@@ -100,6 +102,7 @@ func main() {
 		return
 	}
 
+	// ==========================================
 	// Load configuration
 	pathname, _, err := config.LocateConfig(pathname)
 	if err != nil {
@@ -113,39 +116,72 @@ func main() {
 		os.Exit(1) // corrupt config file?
 	}
 
+	if logLevel == "" {
+		logLevel = cfg.LogLevel
+	}
+
 	lvl, err := toLogLevel(logLevel)
 	if err != nil {
-		fmt.Printf("Bad log level: %s %v", lvl.String(), err)
+		fmt.Printf("Bad log level (defaulting to INFO): %s %v", lvl.String(), err)
 	}
-	cfg.LogLevel = lvl.String()
+	cfg.LogLevel = lvl.String() // update in-memory instance only
 
 	// ==========================================
 	// Configure slog for rotation
-	dir := filepath.Dir(cfg.LogFile)
+	// dir := filepath.Dir(cfg.LogFile)
 	name := filepath.Base(cfg.LogFile)
 	ext := filepath.Ext(name)
 	name = strings.TrimSuffix(name, ext)
 
-	handler, err := rotoslog.NewHandler(
-		rotoslog.LogDir(dir),
-		rotoslog.FilePrefix(name+"-"),
-		rotoslog.FileExt(ext),
-		rotoslog.DateTimeLayout("20060102150405"),
-		rotoslog.MaxFileSize(1024*1024), // default is 32MB
-		rotoslog.MaxRotatedFiles(4),     // default is 8
-		rotoslog.HandlerOptions(slog.HandlerOptions{Level: lvl}),
-		rotoslog.LogHandlerBuilder(slog.NewTextHandler),
-		// rotoslog.LogHandlerBuilder(slog.NewJSONHandler),
-	)
+	opts := &slog.HandlerOptions{
+		AddSource: true,
+		Level:     lvl,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			// Formats time to "YYYY-MM-DD hh:mm:ss.mmm"
+			if a.Key == slog.TimeKey {
+				a.Value = slog.StringValue(a.Value.Time().Format("2006-01-02 15:04:05.000"))
+			}
+			// Reduces the source path to just the base name
+			if a.Key == slog.SourceKey {
+				source, _ := a.Value.Any().(*slog.Source)
+				if source != nil {
+					source.File = filepath.Base(source.File)
+				}
+			}
+			return a
+		},
+	}
+
+	logWriter := &timberjack.Logger{
+		Filename:           cfg.LogFile,           // Choose an appropriate path
+		MaxSize:            1,                     // megabytes
+		MaxBackups:         4,                     // backups
+		MaxAge:             28,                    // days
+		Compression:        "none",                // "none" | "gzip" | "zstd" (preferred over legacy Compress)
+		LocalTime:          true,                  // default: false (use UTC)
+		RotationInterval:   24 * time.Hour,        // Rotate daily if no other rotation met
+		RotateAtMinutes:    []int{0, 15, 30, 45},  // Also rotate at HH:00, HH:15, HH:30, HH:45
+		RotateAt:           []string{"00:00"},     // Also rotate at 00:00 and 12:00 each day
+		BackupTimeFormat:   "2006.01.02_15-04-05", // Rotated files will have format <logfilename>-2006-01-02-15-04-05-<reason>.log
+		AppendTimeAfterExt: false,                 // put timestamp after ".log" (foo.log-<timestamp>-<reason>)
+		FileMode:           0o644,                 // Custom permissions for newly created files. If unset or 0, defaults to 640.
+	}
+	defer logWriter.Close() // Ensure logger is closed on application exit to stop goroutines
+
+	// Validate backup time format once during setup
+	err = logWriter.ValidateBackupTimeFormat()
 	if err != nil {
-		slog.Error("Failed to open log file", slog.Any("error", err))
+		fmt.Printf("Invalid backup time format: %s %v\n", logWriter.BackupTimeFormat, err)
 		os.Exit(1)
 	}
-	defer handler.Close()
-	logger := slog.New(handler)
-	slog.SetDefault(logger)
 
-	slog.Debug("Config loaded", slog.String("Config pathname", pathname))
+	handler := slog.NewTextHandler(logWriter, opts)
+	slog.SetDefault(slog.New(handler))
+
+	logWriter.RotateWithReason("restart")
+
+	slog.Info("Application started")
+	slog.Debug("Config loaded", slog.String("pathname", pathname))
 	slog.Debug("Logging set", slog.String("level", cfg.LogLevel))
 
 	// ==========================================
@@ -160,7 +196,7 @@ func main() {
 	var wg sync.WaitGroup
 
 	// Create and run the port proxy server
-	proxyServer := proxy.NewServer(cfg)
+	proxyServer := rproxy.NewServer(cfg)
 	if err := proxyServer.Start(ctx, &wg); err != nil {
 		slog.Error("Failed to start the proxy server", slog.Any("error", err))
 		os.Exit(1)
