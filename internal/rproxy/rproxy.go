@@ -55,7 +55,7 @@ func (s *Server) Start(ctx context.Context, wg *sync.WaitGroup) error {
 		DialContext: func(dialCtx context.Context, network, addr string) (net.Conn, error) {
 			return s.makeConnection(dialCtx, network, addr)
 		},
-		MaxIdleConns:          s.cfg.PoolMaxConnections,
+		MaxIdleConns:          s.cfg.MaxIdleConnections,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,

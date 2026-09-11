@@ -149,7 +149,6 @@ func TestWOLSender_Send(t *testing.T) {
 	t.Run("Valid MAC address successfully sends packet", func(t *testing.T) {
 		cfg := config.DefaultConfig()
 		// cfg.ServerMAC = "00:11:22:33:44:55"
-		// cfg.WOLServerPort = 9
 		sender := NewWOLSender(cfg)
 
 		err := sender.Send(t.Context())

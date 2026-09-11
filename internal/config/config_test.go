@@ -1,14 +1,23 @@
 package config
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/grosenberg/wol-proxy/internal/testutil"
 	"gopkg.in/yaml.v3"
 )
+
+func TestMain(m *testing.M) {
+	cleanup := testutil.InitMainLogging("wol-proxy-test.log")
+	defer cleanup()
+	os.Exit(m.Run())
+}
 
 func TestFileExists(t *testing.T) {
 	// Create a temporary file
@@ -33,23 +42,23 @@ func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 
 	if cfg.ServerMAC != "20:25:64:84:cf:96" {
-		t.Errorf("DefaultConfig().ServerMAC = %s, want %s",
+		t.Errorf("DefaultConfig().ServerMAC = %s, expect %s",
 			cfg.ServerMAC, "20:25:64:84:cf:96")
 	}
 
 	if cfg.ServerIP != "192.168.1.140" {
-		t.Errorf("DefaultConfig().ServerIP = %s, want %s",
+		t.Errorf("DefaultConfig().ServerIP = %s, expect %s",
 			cfg.ServerIP, "192.168.1.140")
 	}
 
 	if cfg.ProxyPort != 11434 {
-		t.Errorf("DefaultConfig().LocalProxyPort = %d, want %d",
+		t.Errorf("DefaultConfig().LocalProxyPort = %d, expect %d",
 			cfg.ProxyPort, 11434)
 	}
 
-	if cfg.PoolMaxConnections != 100 {
-		t.Errorf("DefaultConfig().MaxConnections = %d, want %d",
-			cfg.PoolMaxConnections, 100)
+	if cfg.MaxIdleConnections != 100 {
+		t.Errorf("DefaultConfig().MaxConnections = %d, expect %d",
+			cfg.MaxIdleConnections, 100)
 	}
 }
 
@@ -58,7 +67,7 @@ func TestLoadConfig_FileNotFound(t *testing.T) {
 	cfg, err := LoadConfig("non_existent_config.yaml")
 
 	if err != nil {
-		t.Errorf("LoadConfig() error = %v, want nil", err)
+		t.Errorf("LoadConfig() error = %v, expect nil", err)
 	}
 
 	if cfg == nil {
@@ -163,16 +172,24 @@ func TestInvalidConfig(t *testing.T) {
 
 func TestLocateConfig_ExplicitPath(t *testing.T) {
 	custom := "custom/path/config.yaml"
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("LocateConfig(%q) unexpected error: %v", custom, err)
+	}
+	expect := filepath.Join(cwd, custom)
 	got, _, err := LocateConfig(custom)
 	if err != nil {
 		t.Fatalf("LocateConfig(%q) unexpected error: %v", custom, err)
 	}
-	if got != custom {
-		t.Errorf("LocateConfig(%q) = %q, want %q", custom, got, custom)
+	if got != expect {
+		t.Errorf("LocateConfig(%q) = %q, expect %q", custom, got, expect)
 	}
 }
 
 func TestLocateConfig_EmptyPath(t *testing.T) {
+	root := testutil.RootDir()
+	expectedPath := filepath.Join(root, ConfigName) // the default config.yaml lives in root
+
 	got, _, err := LocateConfig("")
 	if err != nil {
 		t.Fatalf("LocateConfig(\"\") unexpected error: %v", err)
@@ -180,13 +197,37 @@ func TestLocateConfig_EmptyPath(t *testing.T) {
 	if got == "" {
 		t.Errorf("LocateConfig(\"\") returned empty string")
 	}
+	if got != expectedPath {
+		t.Errorf("LocateConfig(\"\") = %q, expect %q", got, expectedPath)
+	}
 }
 
-func TestLocateConfig_UserConfigDirFound(t *testing.T) {
+func TestLocateConfig_DottedPath(t *testing.T) {
+	root := testutil.RootDir()
+	configDir := filepath.Join(root, "internal", "config")
+	// the prototypical config.yaml lives in the config dir
+	expect := filepath.Join(configDir, ConfigName)
+	t.Chdir(configDir)
 
-	// Execute with CWD set to repository root to avoid resource collision
-	root := findRepoRoot(t)
-	t.Chdir(root)
+	got, _, err := LocateConfig(".")
+	if err != nil {
+		t.Fatalf("LocateConfig(\".\") unexpected error: %v", err)
+	}
+	if got == "" {
+		t.Errorf("LocateConfig(\".\") returned empty string")
+	}
+	if got != expect {
+		t.Errorf("LocateConfig(\".\") = %q, expect %q", got, expect)
+	}
+}
+
+func TestLocateConfig_AppDataPath(t *testing.T) {
+	root := testutil.RootDir()
+	src := filepath.Join(root, ConfigName)
+	utilDir := filepath.Join(root, "internal", "testutil")
+
+	// no config.yaml lives in the testutil dir
+	t.Chdir(utilDir)
 
 	tmpDir, err := os.MkdirTemp("", "userconfig-*")
 	if err != nil {
@@ -195,42 +236,38 @@ func TestLocateConfig_UserConfigDirFound(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Create AppName/config.yaml inside tmpDir
-	appConfigDir := filepath.Join(tmpDir, AppName)
-	if err := os.MkdirAll(appConfigDir, 0755); err != nil {
+	tmpAppDataPath := filepath.Join(tmpDir, AppName)
+	if err := os.MkdirAll(tmpAppDataPath, 0755); err != nil {
 		t.Fatal(err)
 	}
-	expectedPath := filepath.Join(appConfigDir, ConfigName)
-	if err := os.WriteFile(expectedPath, []byte("# test config\n"), 0644); err != nil {
-		t.Fatal(err)
+
+	tmpAppDataPathname := filepath.Join(tmpAppDataPath, ConfigName)
+	_, err = os.Stat(tmpAppDataPathname)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			if err := testutil.CopyFile(src, tmpAppDataPathname); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			t.Fatalf("Unexpected error: %v", err)
+		}
 	}
 
 	// Temporarily override environment variables for UserConfigDir
 	t.Setenv("AppData", tmpDir)
 	t.Setenv("XDG_CONFIG_HOME", tmpDir)
 
-	got, _, err := LocateConfig("")
-	if err != nil {
-		t.Fatalf("LocateConfig(\"\") error: %v", err)
+	got, exists, err := LocateConfig("")
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("error accessing AppData config file: %v", err)
 	}
-	if got != expectedPath {
-		t.Errorf("LocateConfig(\"\") = %q, want %q", got, expectedPath)
+	if !exists {
+		t.Errorf("error: could not find AppData config file")
 	}
-}
-
-func findRepoRoot(t *testing.T) string {
-	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
+	if got == "" {
+		t.Errorf("LocateConfig returned empty string")
 	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("could not find repository root (go.mod)")
-		}
-		dir = parent
+	if got != tmpAppDataPathname {
+		t.Errorf("LocateConfig = %q, expect %q", got, tmpAppDataPathname)
 	}
 }

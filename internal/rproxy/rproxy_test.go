@@ -7,12 +7,20 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/grosenberg/wol-proxy/internal/config"
+	"github.com/grosenberg/wol-proxy/internal/testutil"
 )
+
+func TestMain(m *testing.M) {
+	cleanup := testutil.InitMainLogging("wol-proxy-test.log")
+	defer cleanup()
+	os.Exit(m.Run())
+}
 
 func getFreePort(t *testing.T) uint16 {
 	t.Helper()

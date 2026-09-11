@@ -8,7 +8,9 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -26,51 +28,47 @@ type Config struct {
 	ProxyXferTimeout time.Duration `yaml:"proxy_xfer_timeout"`
 
 	// Ping settings
-	PingMajorCheckInterval time.Duration `yaml:"ping_alive_interval"`    // major interval between checks of remote status
-	PingSetTimeout         time.Duration `yaml:"ping_set_timeout"`       // minor interval to wait for ping all responses
-	PingSetCount           int           `yaml:"ping_set_count"`         // number of retries per major interval
-	PingRetryInterval      time.Duration `yaml:"ping_retry_interval"`    // minor interval between individual pings
-	PingLogStatusChange    bool          `yaml:"ping_log_status_change"` // log state change
+	PingLogStatusChange bool `yaml:"ping_log_status_change"` // log state change
 
 	// WOL settings
-	WOLServerPort     uint16        `yaml:"wol_port"`
-	WOLDetectInterval time.Duration `yaml:"wol_detect_interval"`
-	WOLRetryInterval  time.Duration `yaml:"wol_retry_interval"`
+	WOLServerPort     uint16        `yaml:"wol_port"`            // default is 9
+	WOLDetectInterval time.Duration `yaml:"wol_detect_interval"` // max time for server to wake after WOL packet send
+	WOLRetryInterval  time.Duration `yaml:"wol_retry_interval"`  // time between pings during wake detect
 	WOLMaxRetries     int           `yaml:"wol_max_retries"`
 
-	// Internal Ops settings -- probably obsolete
-	PoolMaxConnections int           `yaml:"pool_max_connections"`
-	PoolChanSize       int           `yaml:"pool_chan_size"` // standard Ethernet MTU: 1,500 bytes.
-	ShutdownTimeout    time.Duration `yaml:"shutdown_timeout"`
+	// Internal Ops settings
+	MaxIdleConnections int           `yaml:"max_idle_connections"` // max concurrent keep-alive connections
+	ShutdownTimeout    time.Duration `yaml:"shutdown_timeout"`     // wait time between graceful and forced shutdown
 
 	// Logging
-	LogLevel string `yaml:"log_level"`
-	LogFile  string `yaml:"log_file"`
+	LogMaxSize    int      `yaml:"log_maxsize"`
+	LogMaxBackups int      `yaml:"log_maxbackups"`
+	LogRotateAt   []string `yaml:"log_rotateat"`
+	LogLevel      string   `yaml:"log_level"`
+	LogFile       string   `yaml:"log_file"`
 }
 
 // DefaultConfig returns configuration with sensible defaults
 func DefaultConfig() *Config {
 	return &Config{
-		ServerMAC:              "20:25:64:84:cf:96",    // server MAC
-		ServerIP:               "192.168.1.140",        // server IP address
-		ServerMask:             24,                     // class C mask
-		ProxyPort:              11434,                  // port to proxy local <-> server
-		ProxyDialTimeout:       30 * time.Second,       // server dial timeout
-		ProxyXferTimeout:       5 * time.Second,        // internal data R/W xfer timeout
-		PingMajorCheckInterval: 30 * time.Second,       // not used
-		PingSetTimeout:         5 * time.Second,        // total time to send pings
-		PingRetryInterval:      500 * time.Millisecond, // internal interval between pings
-		PingSetCount:           1,                      // number of pings to send; -1 for unbounded
-		PingLogStatusChange:    true,                   // log awake <-> sleep changes
-		WOLServerPort:          9,                      // dest port for WOL packet
-		WOLDetectInterval:      10 * time.Second,       // max time for server to awake after WOL packet send
-		WOLRetryInterval:       500 * time.Millisecond, // not used
-		WOLMaxRetries:          3,                      // max number of WOL packet send retries
-		PoolMaxConnections:     100,                    // not used
-		PoolChanSize:           1024,                   // not used
-		ShutdownTimeout:        1 * time.Second,        // un-graceful shutdown limit
-		LogLevel:               "info",                 // min log level
-		LogFile:                "./wol-proxy.log",      // log file location
+		ServerMAC:           "20:25:64:84:cf:96",    // server MAC
+		ServerIP:            "192.168.1.140",        // server IP address
+		ServerMask:          24,                     // class C mask
+		ProxyPort:           11434,                  // port to proxy local <-> server
+		ProxyDialTimeout:    30 * time.Second,       // server dial timeout
+		ProxyXferTimeout:    5 * time.Second,        // internal data R/W xfer timeout
+		PingLogStatusChange: true,                   // log awake <-> sleep changes
+		WOLServerPort:       9,                      // dest port for WOL packet
+		WOLDetectInterval:   10 * time.Second,       // max time for server to wake after WOL packet send
+		WOLRetryInterval:    500 * time.Millisecond, // not used
+		WOLMaxRetries:       3,                      // max number of WOL packet send retries
+		MaxIdleConnections:  100,                    // max number of idle (keep-alive) connections
+		ShutdownTimeout:     1 * time.Second,        // un-graceful shutdown limit
+		LogMaxSize:          1,                      // max size in MB
+		LogMaxBackups:       4,                      // max number of log files to keep
+		LogRotateAt:         []string{},             // rotate at ["00:00", "12:00"] each day
+		LogLevel:            "info",                 // min log level
+		LogFile:             "./wol-proxy.log",      // log file location
 	}
 }
 
@@ -97,14 +95,35 @@ func LocateConfig(pathname string) (string, bool, error) {
 
 	// evaluate the given pathname
 	if pathname != "" {
-		base := filepath.Base(pathname)
-		ext := filepath.Ext(base)
+		pathname = path.Clean(pathname)
 
-		// add default filename if only a directory was given
-		if base == "." || base == ".." || ext == "" {
+		if path.IsAbs(pathname) {
+			ext := filepath.Ext(pathname)
+			if ext != "" && ext != ".yaml" && ext != ".yml" {
+				return "", false, fmt.Errorf("Expected a YAML config filename, not %s\n", pathname)
+			}
+			if ext == "" {
+				pathname = filepath.Join(pathname, ConfigName)
+			}
+			exists, err := PathExists(pathname)
+			return pathname, exists, err
+		}
+
+		if !path.IsAbs(pathname) {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return "", false, fmt.Errorf("failed to determine current working directory: %+v", err)
+			}
+			pathname = filepath.Join(cwd, pathname)
+		}
+
+		pathname = path.Clean(pathname)
+		ext := filepath.Ext(pathname)
+		if ext != "" && ext != ".yaml" && ext != ".yml" {
+			return "", false, fmt.Errorf("Expected a YAML config filename, not %s\n", pathname)
+		}
+		if ext == "" {
 			pathname = filepath.Join(pathname, ConfigName)
-		} else if ext != ".yaml" && ext != ".yml" {
-			return "", false, fmt.Errorf("Expected a YAML config filename, not %s\n", base)
 		}
 
 		exists, err := PathExists(pathname)
@@ -227,7 +246,7 @@ func SaveConfig(pathname string, cfg *Config, force bool) error {
 	}
 
 	autoGen := false
-	if cfg == nil || *cfg == *DefaultConfig() {
+	if cfg == nil || reflect.DeepEqual(cfg, DefaultConfig()) {
 		autoGen = true
 		cfg = DefaultConfig()
 	}

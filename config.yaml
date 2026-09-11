@@ -1,23 +1,18 @@
-# Application Configuration
-# This file was auto-generated with default values
-# Modify as needed
 server_mask: 24
 server_ip: 192.168.1.140
 server_mac: 20:25:64:84:cf:96
 proxy_port: 11434
 proxy_dial_timeout: 30s
 proxy_xfer_timeout: 5s
-ping_alive_interval: 30s
-ping_set_timeout: 5s
-ping_set_count: 1
-ping_retry_interval: 500ms
 ping_log_status_change: true
 wol_port: 9
 wol_detect_interval: 10s
 wol_retry_interval: 500ms
 wol_max_retries: 3
-pool_max_connections: 100
-pool_chan_size: 1024
+max_idle_connections: 100
 shutdown_timeout: 1s
-log_level: info
+log_maxsize: 1
+log_maxbackups: 4
+log_rotateat: []
+log_level: debug
 log_file: ./wol-proxy.log

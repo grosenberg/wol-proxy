@@ -100,7 +100,7 @@ func (w *WOLSender) detectStateChange(ctx context.Context, m *monitor.Monitor) b
 		case <-timeout:
 			return false // no state change detected
 		case <-ticker.C:
-			if m.Ping(ctx) { // one ping only
+			if m.Ping(ctx) { // one ping only (per tick)
 				return true
 			}
 		}

@@ -130,9 +130,9 @@ func TestMonitor_Ping(t *testing.T) {
 	t.Run("Loopback reachable", func(t *testing.T) {
 		cfg := config.DefaultConfig()
 		cfg.ServerIP = "127.0.0.1"
-		cfg.PingSetTimeout = 1 * time.Second
-		cfg.PingRetryInterval = 100 * time.Millisecond
-		cfg.PingSetCount = 1
+		// cfg.PingSetTimeout = 1 * time.Second
+		// cfg.PingRetryInterval = 100 * time.Millisecond
+		// cfg.PingSetCount = 1
 
 		m := NewMonitor(cfg)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -164,9 +164,9 @@ func TestMonitor_Ping(t *testing.T) {
 		cfg := config.DefaultConfig()
 		// 192.0.2.1 is TEST-NET-1 (RFC 5737), guaranteed to not respond
 		cfg.ServerIP = "192.0.2.1"
-		cfg.PingSetTimeout = 300 * time.Millisecond
-		cfg.PingRetryInterval = 50 * time.Millisecond
-		cfg.PingSetCount = 1
+		// cfg.PingSetTimeout = 300 * time.Millisecond
+		// cfg.PingRetryInterval = 50 * time.Millisecond
+		// cfg.PingSetCount = 1
 
 		m := NewMonitor(cfg)
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
@@ -191,9 +191,9 @@ func TestMonitor_Ping(t *testing.T) {
 	t.Run("Canceled context returns asleep or failure", func(t *testing.T) {
 		cfg := config.DefaultConfig()
 		cfg.ServerIP = "192.0.2.1"
-		cfg.PingSetTimeout = 5 * time.Second
-		cfg.PingRetryInterval = 500 * time.Millisecond
-		cfg.PingSetCount = 3
+		// cfg.PingSetTimeout = 5 * time.Second
+		// cfg.PingRetryInterval = 500 * time.Millisecond
+		// cfg.PingSetCount = 3
 
 		m := NewMonitor(cfg)
 		ctx, cancel := context.WithCancel(context.Background())
@@ -211,9 +211,9 @@ func TestMonitor_Ping(t *testing.T) {
 	t.Run("Invalid target sets state", func(t *testing.T) {
 		cfg := config.DefaultConfig()
 		cfg.ServerIP = "invalid:::target::ip"
-		cfg.PingSetTimeout = 100 * time.Millisecond
-		cfg.PingRetryInterval = 50 * time.Millisecond
-		cfg.PingSetCount = 1
+		// cfg.PingSetTimeout = 100 * time.Millisecond
+		// cfg.PingRetryInterval = 50 * time.Millisecond
+		// cfg.PingSetCount = 1
 
 		m := NewMonitor(cfg)
 		ctx := context.Background()

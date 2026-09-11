@@ -154,14 +154,14 @@ func main() {
 
 	logWriter := &timberjack.Logger{
 		Filename:           cfg.LogFile,           // Choose an appropriate path
-		MaxSize:            1,                     // megabytes
-		MaxBackups:         4,                     // backups
-		MaxAge:             28,                    // days
+		MaxSize:            cfg.LogMaxSize,        // megabytes
+		MaxBackups:         cfg.LogMaxBackups,     // backup count
+		MaxAge:             28,                    // retension in days
 		Compression:        "none",                // "none" | "gzip" | "zstd" (preferred over legacy Compress)
 		LocalTime:          true,                  // default: false (use UTC)
 		RotationInterval:   24 * time.Hour,        // Rotate daily if no other rotation met
-		RotateAtMinutes:    []int{0, 15, 30, 45},  // Also rotate at HH:00, HH:15, HH:30, HH:45
-		RotateAt:           []string{"00:00"},     // Also rotate at 00:00 and 12:00 each day
+		RotateAtMinutes:    []int{},               // Also rotate at HH:00, HH:15, HH:30, HH:45
+		RotateAt:           cfg.LogRotateAt,       // Also rotate at 00:00 and 12:00 each day
 		BackupTimeFormat:   "2006.01.02_15-04-05", // Rotated files will have format <logfilename>-2006-01-02-15-04-05-<reason>.log
 		AppendTimeAfterExt: false,                 // put timestamp after ".log" (foo.log-<timestamp>-<reason>)
 		FileMode:           0o644,                 // Custom permissions for newly created files. If unset or 0, defaults to 640.
